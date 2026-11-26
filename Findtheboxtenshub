@@ -1,0 +1,383 @@
+
+--[[
+XRTCF HUB - CORRECTED VERSION
+SECTION 1: SERVER SCRIPT
+Place in ServerScriptService.
+
+SECTION 2: CLIENT SCRIPT
+Place in StarterPlayerScripts.
+]]
+
+----------------------------------------------------------------
+-- SECTION 1: SERVER
+----------------------------------------------------------------
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local remote = ReplicatedStorage:FindFirstChild("XRTCF_Remote")
+
+if not remote then
+    remote = Instance.new("RemoteEvent")
+    remote.Name = "XRTCF_Remote"
+    remote.Parent = ReplicatedStorage
+end
+
+local states = {}
+local cooldowns = {}
+local initialized = {}
+
+local function broadcast(player, enabled)
+    for _, viewer in ipairs(Players:GetPlayers()) do
+        remote:FireClient(viewer, "Visibility", player.UserId, enabled)
+    end
+end
+
+local function setInvisible(player, enabled)
+    states[player.UserId] = enabled
+    player:SetAttribute("XRTCF_Invisible", enabled)
+    broadcast(player, enabled)
+end
+
+remote.OnServerEvent:Connect(function(player, action, value)
+    if action == "Sync" then
+        for userId, enabled in pairs(states) do
+            if enabled then
+                remote:FireClient(player, "Visibility", userId, true)
+            end
+        end
+        return
+    end
+
+    if action ~= "Invisible" then return end
+    if typeof(value) ~= "boolean" then return end
+
+    local now = os.clock()
+
+    if cooldowns[player] and now - cooldowns[player] < 0.2 then
+        return
+    end
+
+    cooldowns[player] = now
+    setInvisible(player, value)
+end)
+
+local function setupPlayer(player)
+    if initialized[player] then return end
+    initialized[player] = true
+    states[player.UserId] = false
+
+    player.CharacterAdded:Connect(function()
+        task.wait(0.5)
+        broadcast(player, states[player.UserId] == true)
+    end)
+end
+
+Players.PlayerAdded:Connect(setupPlayer)
+
+for _, player in ipairs(Players:GetPlayers()) do
+    setupPlayer(player)
+end
+
+Players.PlayerRemoving:Connect(function(player)
+    states[player.UserId] = nil
+    cooldowns[player] = nil
+    initialized[player] = nil
+    broadcast(player, false)
+end)
+
+----------------------------------------------------------------
+-- SECTION 2: CLIENT
+-- Separate LocalScript in StarterPlayerScripts.
+----------------------------------------------------------------
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LP = Players.LocalPlayer
+local Remote = ReplicatedStorage:WaitForChild("XRTCF_Remote")
+
+local enabled = false
+local visibility = {}
+local originals = setmetatable({}, {__mode = "k"})
+local characterConnections = {}
+
+local function updateCharacter(player)
+    if not player or not player.Character then return end
+
+    local active = visibility[player.UserId] == true
+    local transparency = player == LP and 0.65 or 1
+
+    for _, obj in ipairs(player.Character:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            if originals[obj] == nil then
+                originals[obj] = obj.LocalTransparencyModifier
+            end
+
+            obj.LocalTransparencyModifier = active
+                and transparency or originals[obj]
+
+        elseif obj:IsA("Decal") or obj:IsA("Texture") then
+            if originals[obj] == nil then
+                originals[obj] = obj.Transparency
+            end
+
+            obj.Transparency = active
+                and math.max(originals[obj], transparency)
+                or originals[obj]
+        end
+    end
+end
+
+local function updatePlayer(userId, state)
+    visibility[userId] = state
+
+    local player = Players:GetPlayerByUserId(userId)
+
+    if player then
+        updateCharacter(player)
+    end
+end
+
+Remote.OnClientEvent:Connect(function(action, userId, state)
+    if action == "Visibility" then
+        updatePlayer(userId, state)
+    end
+end)
+
+local function watchPlayer(player)
+    if characterConnections[player] then
+        characterConnections[player]:Disconnect()
+    end
+
+    characterConnections[player] = player.CharacterAdded:Connect(function(character)
+        task.wait(0.3)
+        updateCharacter(player)
+
+        character.DescendantAdded:Connect(function()
+            task.defer(updateCharacter, player)
+        end)
+    end)
+
+    if player.Character then
+        updateCharacter(player)
+
+        player.Character.DescendantAdded:Connect(function()
+            task.defer(updateCharacter, player)
+        end)
+    end
+end
+
+for _, player in ipairs(Players:GetPlayers()) do
+    watchPlayer(player)
+end
+
+Players.PlayerAdded:Connect(watchPlayer)
+
+Players.PlayerRemoving:Connect(function(player)
+    visibility[player.UserId] = nil
+
+    if characterConnections[player] then
+        characterConnections[player]:Disconnect()
+        characterConnections[player] = nil
+    end
+end)
+
+Remote:FireServer("Sync")
+
+----------------------------------------------------------------
+-- GUI CREATION
+----------------------------------------------------------------
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "XRTCF_TitanHub"
+gui.ResetOnSpawn = false
+gui.Parent = LP:WaitForChild("PlayerGui")
+
+local main = Instance.new("Frame")
+main.Size = UDim2.fromOffset(360, 400)
+main.Position = UDim2.new(0.5, -180, 0.5, -200)
+main.BackgroundColor3 = Color3.fromRGB(17, 19, 27)
+main.BorderSizePixel = 0
+main.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 12)
+corner.Parent = main
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 55)
+title.BackgroundTransparency = 1
+title.Text = "XRTCF TITAN HUB"
+title.TextColor3 = Color3.new(1, 1, 1)
+title.TextSize = 20
+title.Font = Enum.Font.GothamBold
+title.Parent = main
+
+local sidebar = Instance.new("Frame")
+sidebar.Position = UDim2.fromOffset(10, 65)
+sidebar.Size = UDim2.fromOffset(105, 320)
+sidebar.BackgroundColor3 = Color3.fromRGB(25, 28, 39)
+sidebar.BorderSizePixel = 0
+sidebar.Parent = main
+
+local sideCorner = Instance.new("UICorner")
+sideCorner.CornerRadius = UDim.new(0, 8)
+sideCorner.Parent = sidebar
+
+local content = Instance.new("Frame")
+content.Position = UDim2.fromOffset(125, 65)
+content.Size = UDim2.fromOffset(225, 320)
+content.BackgroundColor3 = Color3.fromRGB(25, 28, 39)
+content.BorderSizePixel = 0
+content.Parent = main
+
+local contentCorner = Instance.new("UICorner")
+contentCorner.CornerRadius = UDim.new(0, 8)
+contentCorner.Parent = content
+
+local sideLayout = Instance.new("UIListLayout")
+sideLayout.Padding = UDim.new(0, 5)
+sideLayout.SortOrder = Enum.SortOrder.LayoutOrder
+sideLayout.Parent = sidebar
+
+local contentLayout = Instance.new("UIListLayout")
+contentLayout.Padding = UDim.new(0, 7)
+contentLayout.SortOrder = Enum.SortOrder.LayoutOrder
+contentLayout.Parent = content
+
+local function clearContent()
+    for _, obj in ipairs(content:GetChildren()) do
+        if obj:IsA("GuiObject") and obj ~= contentLayout then
+            obj:Destroy()
+        end
+    end
+end
+
+local function createAction(name, callback, order)
+    local button = Instance.new("TextButton")
+    button.Name = name
+    button.LayoutOrder = order or #content:GetChildren()
+    button.Size = UDim2.new(1, -12, 0, 42)
+    button.BackgroundColor3 = Color3.fromRGB(40, 45, 59)
+    button.TextColor3 = Color3.new(1, 1, 1)
+    button.Text = name
+    button.TextSize = 12
+    button.Font = Enum.Font.GothamSemibold
+    button.BorderSizePixel = 0
+    button.Parent = content
+
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 6)
+    c.Parent = button
+
+    button.MouseButton1Click:Connect(callback)
+
+    return button
+end
+
+local function createPage(name)
+    clearContent()
+
+    local label = Instance.new("TextLabel")
+    label.LayoutOrder = 0
+    label.Size = UDim2.new(1, -12, 0, 40)
+    label.BackgroundTransparency = 1
+    label.Text = name
+    label.TextColor3 = Color3.fromRGB(110, 190, 255)
+    label.TextSize = 17
+    label.Font = Enum.Font.GothamBold
+    label.Parent = content
+
+    if name == "PLAYER" then
+        local button
+
+        button = createAction(
+            "INVISIBILITY: " .. (enabled and "ON" or "OFF"),
+            function()
+                enabled = not enabled
+                Remote:FireServer("Invisible", enabled)
+
+                button.Text = "INVISIBILITY: "
+                    .. (enabled and "ON" or "OFF")
+
+                button.BackgroundColor3 = enabled
+                    and Color3.fromRGB(35, 115, 75)
+                    or Color3.fromRGB(40, 45, 59)
+            end
+        )
+
+        button.BackgroundColor3 = enabled
+            and Color3.fromRGB(35, 115, 75)
+            or Color3.fromRGB(40, 45, 59)
+
+    elseif name == "HOME" then
+        createAction("XRTCF TITAN HUB", function() end)
+        createAction("Status: Ready", function() end)
+
+    elseif name == "COMBAT" then
+        createAction("Combat integration", function()
+            print("Connect your own combat system here")
+        end)
+
+    elseif name == "ESP" then
+        createAction("Visual integration", function()
+            print("Connect your own ESP system here")
+        end)
+
+    elseif name == "AUTO" then
+        createAction("Testing automation", function()
+            print("Connect your own test automation here")
+        end)
+
+    elseif name == "MOVEMENT" then
+        createAction("Movement integration", function()
+            print("Connect your own movement system here")
+        end)
+
+    elseif name == "SETTINGS" then
+        createAction("Re-sync visibility", function()
+            Remote:FireServer("Sync")
+        end)
+
+        createAction("Close HUB", function()
+            gui.Enabled = false
+        end)
+    end
+end
+
+local tabs = {
+    "HOME",
+    "COMBAT",
+    "ESP",
+    "AUTO",
+    "MOVEMENT",
+    "PLAYER",
+    "SETTINGS"
+}
+
+for index, name in ipairs(tabs) do
+    local button = Instance.new("TextButton")
+    button.Name = name
+    button.LayoutOrder = index
+    button.Size = UDim2.new(1, -8, 0, 38)
+    button.BackgroundColor3 = Color3.fromRGB(35, 39, 52)
+    button.Text = name
+    button.TextColor3 = Color3.new(1, 1, 1)
+    button.TextSize = 11
+    button.Font = Enum.Font.GothamBold
+    button.BorderSizePixel = 0
+    button.Parent = sidebar
+
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 6)
+    c.Parent = button
+
+    button.MouseButton1Click:Connect(function()
+        createPage(name)
+    end)
+end
+
+createPage("HOME")
+
+print("[XRTCF] Titan Hub loaded")
